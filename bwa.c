@@ -6,6 +6,7 @@
 #include "bwa.h"
 #include "ksw.h"
 #include "utils.h"
+#include "kstring.h"
 
 #ifdef USE_MALLOC_WRAPPERS
 #  include "malloc_wrap.h"
@@ -91,6 +92,9 @@ uint32_t *bwa_gen_cigar(const int8_t mat[25], int q, int r, int w_, int64_t l_pa
 	uint8_t tmp, *rseq;
 	int i;
 	int64_t rlen;
+	kstring_t str;
+	const char *int2base;
+
 	*n_cigar = 0; *NM = -1;
 	if (l_query <= 0 || rb >= re || (rb < l_pac && re > l_pac)) return 0; // reject if negative length or bridging the forward and reverse strand
 	rseq = bns_get_seq(l_pac, pac, rb, re, &rlen);
@@ -121,19 +125,36 @@ uint32_t *bwa_gen_cigar(const int8_t mat[25], int q, int r, int w_, int64_t l_pa
 		// NW alignment
 		*score = ksw_global(l_query, query, rlen, rseq, 5, mat, q, r, w, n_cigar, &cigar);
 	}
-	{// compute NM
-		int k, x, y, n_mm = 0, n_gap = 0;
-		for (k = 0, x = y = 0; k < *n_cigar; ++k) {
-			int op  = cigar[k]&0xf;
-			int len = cigar[k]>>4;
+	{// compute NM and MD
+		int k, x, y, u, n_mm = 0, n_gap = 0;
+		str.l = str.m = *n_cigar * 4; str.s = (char*)cigar; // append MD to CIGAR
+		int2base = rb < l_pac? "ACGTN" : "TGCAN";
+		for (k = 0, x = y = u = 0; k < *n_cigar; ++k) {
+			int op, len;
+			cigar = (uint32_t*)str.s;
+			op  = cigar[k]&0xf, len = cigar[k]>>4;
 			if (op == 0) { // match
-				for (i = 0; i < len; ++i)
-					if (query[x + i] != rseq[y + i]) ++n_mm;
+				for (i = 0; i < len; ++i) {
+					if (query[x + i] != rseq[y + i]) {
+						kputw(u, &str);
+						kputc(int2base[rseq[y+i]], &str);
+						++n_mm; u = 0;
+					} else ++u;
+				}
 				x += len; y += len;
-			} else if (op == 1) x += len, n_gap += len;
-			else if (op == 2) y += len, n_gap += len;
+			} else if (op == 2) { // deletion
+				if (k > 0 && k < *n_cigar - 1) { // don't do the following if D is the first or the last CIGAR
+					kputw(u, &str); kputc('^', &str);
+					for (i = 0; i < len; ++i)
+						kputc(int2base[rseq[y+i]], &str);
+					u = 0; n_gap += len;
+				}
+				y += len;
+			} else if (op == 1) x += len, n_gap += len; // insertion
 		}
+		kputw(u, &str); kputc(0, &str);
 		*NM = n_mm + n_gap;
+		cigar = (uint32_t*)str.s;
 	}
 	if (rb >= l_pac) // reverse back query
 		for (i = 0; i < l_query>>1; ++i)
@@ -277,9 +298,11 @@ void bwa_idx_destroy(bwaidx_t *idx)
 void bwa_print_sam_hdr(const bntseq_t *bns, const char *rg_line)
 {
 	int i;
+	extern char *bwa_pg;
 	for (i = 0; i < bns->n_seqs; ++i)
 		err_printf("@SQ\tSN:%s\tLN:%d\n", bns->anns[i].name, bns->anns[i].len);
 	if (rg_line) err_printf("%s\n", rg_line);
+	err_printf("%s\n", bwa_pg);
 }
 
 static char *bwa_escape(char *s)

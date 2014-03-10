@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include <math.h>
 #include "bwa.h"
 #include "bwamem.h"
 #include "kvec.h"
@@ -25,9 +27,10 @@ int main_mem(int argc, char *argv[])
 	bwaidx_t *idx;
 	char *rg_line = 0;
 	void *ko = 0, *ko2 = 0;
+	int64_t n_processed = 0;
 
 	opt = mem_opt_init();
-	while ((c = getopt(argc, argv, "paMCSPHk:c:v:s:r:t:R:A:B:O:E:U:w:L:d:T:")) >= 0) {
+	while ((c = getopt(argc, argv, "paMCSPHk:c:v:s:r:t:R:A:B:O:E:U:w:L:d:T:Q:D:m:")) >= 0) {
 		if (c == 'k') opt->min_seed_len = atoi(optarg);
 		else if (c == 'w') opt->w = atoi(optarg);
 		else if (c == 'A') opt->a = atoi(optarg);
@@ -35,7 +38,6 @@ int main_mem(int argc, char *argv[])
 		else if (c == 'O') opt->q = atoi(optarg);
 		else if (c == 'E') opt->r = atoi(optarg);
 		else if (c == 'T') opt->T = atoi(optarg);
-		else if (c == 'L') opt->pen_clip = atoi(optarg);
 		else if (c == 'U') opt->pen_unpaired = atoi(optarg);
 		else if (c == 't') opt->n_threads = atoi(optarg), opt->n_threads = opt->n_threads > 1? opt->n_threads : 1;
 		else if (c == 'P') opt->flag |= MEM_F_NOPAIRING;
@@ -47,8 +49,18 @@ int main_mem(int argc, char *argv[])
 		else if (c == 'd') opt->zdrop = atoi(optarg);
 		else if (c == 'v') bwa_verbose = atoi(optarg);
 		else if (c == 'r') opt->split_factor = atof(optarg);
+		else if (c == 'D') opt->chain_drop_ratio = atof(optarg);
+		else if (c == 'm') opt->max_matesw = atoi(optarg);
 		else if (c == 'C') copy_comment = 1;
-		else if (c == 'R') {
+		else if (c == 'Q') {
+			opt->mapQ_coef_len = atoi(optarg);
+			opt->mapQ_coef_fac = opt->mapQ_coef_len > 0? log(opt->mapQ_coef_len) : 0;
+		} else if (c == 'L') {
+			char *p;
+			opt->pen_clip5 = opt->pen_clip3 = strtol(optarg, &p, 10);
+			if (*p != 0 && ispunct(*p) && isdigit(p[1]))
+				opt->pen_clip3 = strtol(p+1, &p, 10);
+		} else if (c == 'R') {
 			if ((rg_line = bwa_set_rg(optarg)) == 0) return 1; // FIXME: memory leak
 		} else if (c == 's') opt->split_width = atoi(optarg);
 		else return 1;
@@ -65,13 +77,15 @@ int main_mem(int argc, char *argv[])
 		fprintf(stderr, "       -r FLOAT   look for internal seeds inside a seed longer than {-k} * FLOAT [%g]\n", opt->split_factor);
 //		fprintf(stderr, "       -s INT     look for internal seeds inside a seed with less than INT occ [%d]\n", opt->split_width);
 		fprintf(stderr, "       -c INT     skip seeds with more than INT occurrences [%d]\n", opt->max_occ);
+		fprintf(stderr, "       -D FLOAT   drop chains shorter than FLOAT fraction of the longest overlapping chain [%.2f]\n", opt->chain_drop_ratio);
+		fprintf(stderr, "       -m INT     perform at most INT rounds of mate rescues for each read [%d]\n", opt->max_matesw);
 		fprintf(stderr, "       -S         skip mate rescue\n");
 		fprintf(stderr, "       -P         skip pairing; mate rescue performed unless -S also in use\n");
 		fprintf(stderr, "       -A INT     score for a sequence match [%d]\n", opt->a);
 		fprintf(stderr, "       -B INT     penalty for a mismatch [%d]\n", opt->b);
 		fprintf(stderr, "       -O INT     gap open penalty [%d]\n", opt->q);
 		fprintf(stderr, "       -E INT     gap extension penalty; a gap of size k cost {-O} + {-E}*k [%d]\n", opt->r);
-		fprintf(stderr, "       -L INT     penalty for clipping [%d]\n", opt->pen_clip);
+		fprintf(stderr, "       -L INT     penalty for clipping [%d]\n", opt->pen_clip5);
 		fprintf(stderr, "       -U INT     penalty for an unpaired read pair [%d]\n", opt->pen_unpaired);
 		fprintf(stderr, "\nInput/output options:\n\n");
 		fprintf(stderr, "       -p         first query file consists of interleaved paired-end sequences\n");
@@ -128,7 +142,8 @@ int main_mem(int argc, char *argv[])
 		for (i = 0; i < n; ++i) size += seqs[i].l_seq;
 		if (bwa_verbose >= 3)
 			fprintf(stderr, "[M::%s] read %d sequences (%ld bp)...\n", __func__, n, (long)size);
-		mem_process_seqs(opt, idx->bwt, idx->bns, idx->pac, n, seqs, 0);
+		mem_process_seqs(opt, idx->bwt, idx->bns, idx->pac, n_processed, n, seqs, 0);
+		n_processed += n;
 		for (i = 0; i < n; ++i) {
 			err_fputs(seqs[i].sam, stdout);
 			free(seqs[i].name); free(seqs[i].comment); free(seqs[i].seq); free(seqs[i].qual); free(seqs[i].sam);
