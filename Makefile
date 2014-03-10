@@ -13,6 +13,9 @@ PROG=		bwa
 INCLUDES=	
 LIBS=		-lm -lz -lpthread
 SUBDIRS=	.
+PREFIX=/wsu/home/groups/piquelab
+BINDIR=$(PREFIX)/bin
+
 
 .SUFFIXES:.c .o .cc
 
@@ -20,6 +23,11 @@ SUBDIRS=	.
 		$(CC) -c $(CFLAGS) $(DFLAGS) $(INCLUDES) $< -o $@
 
 all:$(PROG)
+
+install:
+	cp $(PROG) $(BINDIR)/
+	cp *.pl $(BINDIR)/
+
 
 bwa:libbwa.a $(AOBJS) main.o
 		$(CC) $(CFLAGS) $(DFLAGS) $(AOBJS) main.o -o $@ -L. -lbwa $(LIBS)
